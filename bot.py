@@ -1,12 +1,24 @@
 import os
+import threading
+from flask import Flask
 import telebot
 from telebot import types
 from yt_dlp import YoutubeDL
 
+# Render uchun web-server
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is active!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# Foydalanuvchilar ID'sini faylga saqlash
 USER_FILE = "users.txt"
 
 def add_user(user_id):
@@ -95,5 +107,6 @@ def handle_message(message):
             os.remove(video_file)
 
 if __name__ == "__main__":
-    print("Bot ishga tushdi...")
+    threading.Thread(target=run_flask, daemon=True).start()
+    print("Bot va Server ishga tushdi...")
     bot.infinity_polling()
