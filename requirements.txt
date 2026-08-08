@@ -1,2 +1,2 @@
-aiogram
+pyTelegramBotAPI
 yt-dlp
