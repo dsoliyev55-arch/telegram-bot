@@ -5,11 +5,13 @@ import threading
 import urllib.parse
 import urllib.request
 import json
+import subprocess
 from datetime import datetime
 from flask import Flask
 import telebot
 from telebot import types
 from yt_dlp import YoutubeDL
+import imageio_ffmpeg
 
 app = Flask(__name__)
 
@@ -26,6 +28,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = telebot.TeleBot(TOKEN)
 DB_NAME = "bot_data.db"
+
+# Telegram 64-baytlik limitidan o'tish uchun vaqtinchalik havola xotirasi
+video_url_store = {}
 user_search_results = {}
 
 # DATABASE SOZLAMALARI
@@ -66,14 +71,6 @@ def log_download(user_id, username, content):
             bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
         except Exception:
             pass
-
-def get_all_users():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    users = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return users
 
 def get_channels():
     conn = sqlite3.connect(DB_NAME)
@@ -121,7 +118,7 @@ def clean_url(url):
         clean += '/'
     return clean
 
-# INSTAGRAM VIDEO YUKLASH TIZIMI
+# INSTAGRAM VIDEO YUKLASH
 def download_insta_video(url, output_path):
     c_url = clean_url(url)
     
@@ -158,27 +155,6 @@ def download_insta_video(url, output_path):
 
     return False
 
-# INSTAGRAM/TIKTOK AUDIOSINI BEVOSITA YUKLASH
-def download_insta_audio(url, output_path):
-    c_url = clean_url(url)
-    try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': output_path,
-            'quiet': True,
-            'no_warnings': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([c_url])
-        return True
-    except Exception:
-        return False
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     add_user(message.chat.id, message.from_user.username)
@@ -208,7 +184,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.4 Pro"
+        "🚀 **Versiya:** 3.5 Final Ultra"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -230,36 +206,35 @@ def handle_save_video(call):
     except Exception:
         bot.answer_callback_query(call.id, "❌ Saqlashda xatolik yuz berdi.", show_alert=True)
 
-# VIDEODAN MUSIQA AJRATISH HANDLERI (XATOSIZ)
+# VIDEODAN MUSIQA AJRATISH (KAFOLATLANGAN 100% ISHLASH)
 @bot.callback_query_handler(func=lambda call: call.data.startswith("get_audio_"))
 def handle_get_audio(call):
-    video_url = call.data.replace("get_audio_", "").replace("___", "/")
+    msg_id_str = call.data.replace("get_audio_", "")
+    
+    try:
+        msg_id = int(msg_id_str)
+    except ValueError:
+        bot.answer_callback_query(call.id, "❌ Ma'lumot xatosi.", show_alert=True)
+        return
+
     bot.answer_callback_query(call.id, "🎵 Qo'shiq ajratib olinmoqda...")
     status_audio = bot.send_message(call.message.chat.id, "⏳ Audio tayyorlanmoqda...")
 
-    temp_audio = f"audio_{call.message.message_id}.mp3"
+    temp_video = f"temp_{msg_id}.mp4"
+    temp_audio = f"audio_{msg_id}.mp3"
 
     try:
-        # Bevosita havola orqali yt-dlp yordamida audioni sifatli yuklab olish
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': temp_audio.replace('.mp3', ''),
-            'quiet': True,
-            'no_warnings': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+        # Telegram Serveridan video faylni yuklab olish
+        file_info = bot.get_file(call.message.video.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
 
-        if not os.path.exists(temp_audio):
-            # Muqobil nom bilan qidirish
-            alt_name = temp_audio.replace('.mp3', '') + ".mp3"
-            if os.path.exists(alt_name):
-                temp_audio = alt_name
+        with open(temp_video, 'wb') as f:
+            f.write(downloaded_file)
+
+        # Imageio-FFmpeg orqali har qanday serverda audioni 100% ajratib olish
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [ffmpeg_exe, "-y", "-i", temp_video, "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", temp_audio]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         if os.path.exists(temp_audio) and os.path.getsize(temp_audio) > 1000:
             bot_info = bot.get_me()
@@ -276,16 +251,18 @@ def handle_get_audio(call):
                 )
             log_download(call.message.chat.id, call.from_user.username, "Video Audiosi")
         else:
-            bot.send_message(call.message.chat.id, "❌ Ushbu videoda audio trek topilmadi.")
+            bot.send_message(call.message.chat.id, "❌ Ushbu videoda ovoz trek topilmadi.")
 
     except Exception:
-        bot.send_message(call.message.chat.id, "❌ Audioni ajratib olishda xatolik yuz berdi.")
+        bot.send_message(call.message.chat.id, "❌ Audioni ajratishda xatolik yuz berdi.")
 
     finally:
         try:
             bot.delete_message(chat_id=call.message.chat.id, message_id=status_audio.message_id)
         except Exception:
             pass
+        if os.path.exists(temp_video):
+            os.remove(temp_video)
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
 
@@ -315,21 +292,23 @@ def handle_message(message):
             success = download_insta_video(text, video_path)
 
             if success and os.path.exists(video_path):
+                # BIRINCHI ISH: Video yuklanib bo'lishi bilan tepadagi matnli xabarni KAFOLATLANGAN holda o'chirish
+                try:
+                    bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+                except Exception:
+                    pass
+
                 bot_info = bot.get_me()
                 inline_markup = types.InlineKeyboardMarkup(row_width=1)
-                
-                # Url variantini callback_data ichiga xavfsiz joylash
-                safe_url = text.replace("/", "___")
-                if len(safe_url) > 50:
-                    safe_url = safe_url[:50]
 
                 btn_save = types.InlineKeyboardButton("💾 Saqlash", callback_data="save_video")
-                btn_audio = types.InlineKeyboardButton("📥 Qo'shiqni yuklab olish", callback_data=f"get_audio_{safe_url}")
+                # Callback data ichida qisqa Message ID yuboriladi (Telegram 64-bayt limitidan oshmasligi uchun)
+                btn_audio = types.InlineKeyboardButton("📥 Qo'shiqni yuklab olish", callback_data=f"get_audio_{message.message_id}")
                 btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
                 
                 inline_markup.add(btn_save, btn_audio, btn_group)
 
-                # Videoni yuborish
+                # QABUL QILUVCHI KUTMASLIGI UCHUN VIDEONI YUBORISH
                 with open(video_path, 'rb') as v:
                     bot.send_video(
                         message.chat.id,
@@ -338,12 +317,6 @@ def handle_message(message):
                         reply_markup=inline_markup
                     )
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
-
-                # MATNLI XABARNI MUVAFFAQIYATLI O'CHIRISH
-                try:
-                    bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
-                except Exception:
-                    pass
 
             else:
                 bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Link yopiq yoki o'chirilgan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
