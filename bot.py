@@ -122,7 +122,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va oson yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 2.1 Pro"
+        "🚀 **Versiya:** 2.2 Pro"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -160,16 +160,17 @@ def handle_message(message):
 
         try:
             ydl_opts = {
-                'format': 'bestvideo+bestaudio/best',
+                'format': 'best',
                 'outtmpl': video_file,
                 'quiet': True,
                 'no_warnings': True,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
             }
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(text, download=True)
                 title = info.get('title', 'Video')
-
-            bot.edit_message_text("⬆️ Telegram'ga yuklanmoqda...", chat_id=message.chat.id, message_id=status_msg.message_id)
 
             inline_markup = types.InlineKeyboardMarkup()
             if shortcode:
@@ -188,12 +189,17 @@ def handle_message(message):
                         caption=f"🎬 {title}\n\n🤖 Bot: InstaSave Bot",
                         reply_markup=inline_markup
                     )
-            bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
 
         except Exception:
-            bot.edit_message_text("❌ Video yuklab bo'lmadi.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            bot.send_message(message.chat.id, "❌ Video yuklab bo'lmadi.")
 
         finally:
+            # Video yuborilgach status xabarni har doim o'chirish
+            try:
+                bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+            except Exception:
+                pass
+
             if os.path.exists(video_file):
                 os.remove(video_file)
 
@@ -261,7 +267,6 @@ def handle_deezer_download(call):
     audio_file = f"full_{call.message.message_id}.mp3"
 
     try:
-        # Ishonchli YouTube Search sozlari
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': audio_file,
@@ -270,17 +275,16 @@ def handle_deezer_download(call):
             'default_search': 'ytsearch1',
             'nocheckcertificate': True,
             'ignoreerrors': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']
+                }
+            }
         }
 
         with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"ytsearch1:{search_query} audio"])
+            ydl.download([f"ytsearch1:{search_query}"])
 
-        # Agar mp3 fayl hosil bo'lmasa, kengaytma izlash
         if not os.path.exists(audio_file):
             for file in os.listdir('.'):
                 if file.startswith(f"full_{call.message.message_id}"):
@@ -301,14 +305,69 @@ def handle_deezer_download(call):
                     parse_mode="Markdown",
                     reply_markup=inline_markup
                 )
-            bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            bot.edit_message_text("❌ Qo'shiq fayli topilmadi. Qayta urinib ko'ring.", chat_id=chat_id, message_id=status_msg.message_id)
+            bot.send_message(chat_id, "❌ Qo'shiq topilmadi.")
 
-    except Exception as e:
-        bot.edit_message_text("❌ Yuklashda xatolik yuz berdi.", chat_id=chat_id, message_id=status_msg.message_id)
+    except Exception:
+        bot.send_message(chat_id, "❌ Qo'shiqni yuklashda xatolik bo'ldi.")
 
     finally:
+        try:
+            bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+        except Exception:
+            pass
+        if os.path.exists(audio_file):
+            os.remove(audio_file)
+
+# INSTAGRAM REELS AUDIOSINI YUKLASH
+@bot.callback_query_handler(func=lambda call: call.data.startswith('aud_'))
+def handle_audio_download(call):
+    bot.answer_callback_query(call.id, "🎵 Qo'shiq yuklanmoqda...")
+    shortcode = call.data.replace('aud_', '')
+    insta_url = f"https://www.instagram.com/p/{shortcode}/"
+
+    status_msg = bot.send_message(call.message.chat.id, "⏳ Qo'shiq ajratib olinmoqda...")
+    audio_file = f"audio_{call.message.message_id}.mp4"
+
+    try:
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': audio_file,
+            'quiet': True,
+            'no_warnings': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(insta_url, download=True)
+            title = info.get('title', 'Instagram Audio')
+
+        bot_info = bot.get_me()
+        inline_markup = types.InlineKeyboardMarkup()
+        btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
+        inline_markup.add(btn_group)
+
+        if os.path.exists(audio_file):
+            with open(audio_file, 'rb') as a:
+                bot.send_audio(
+                    call.message.chat.id,
+                    a,
+                    caption=f"🎵 **{title}**\n\n🤖 Bot: InstaSave Bot",
+                    parse_mode="Markdown",
+                    reply_markup=inline_markup
+                )
+        else:
+            bot.send_message(call.message.chat.id, "❌ Qo'shiq fayli topilmadi.")
+
+    except Exception:
+        bot.send_message(call.message.chat.id, "❌ Qo'shiqni yuklab bo'lmadi.")
+
+    finally:
+        try:
+            bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
+        except Exception:
+            pass
         if os.path.exists(audio_file):
             os.remove(audio_file)
 
