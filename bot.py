@@ -158,6 +158,27 @@ def download_insta_video(url, output_path):
 
     return False
 
+# INSTAGRAM/TIKTOK AUDIOSINI BEVOSITA YUKLASH
+def download_insta_audio(url, output_path):
+    c_url = clean_url(url)
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': output_path,
+            'quiet': True,
+            'no_warnings': True,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([c_url])
+        return True
+    except Exception:
+        return False
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     add_user(message.chat.id, message.from_user.username)
@@ -178,43 +199,6 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    admin_text = (
-        "🛠 **Admin Panel Buyruqlari:**\n\n"
-        "📊 `/stat` - Foydalanuvchilar soni\n"
-        "📜 `/logs` - Oxirgi yuklangan 10 ta media tarixi"
-    )
-    bot.reply_to(message, admin_text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['stat'])
-def send_stats(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    users = get_all_users()
-    bot.reply_to(message, f"📊 Botingizda **{len(users)}** ta foydalanuvchi bor!", parse_mode="Markdown")
-
-@bot.message_handler(commands=['logs'])
-def send_logs(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT username, content, created_at FROM logs ORDER BY id DESC LIMIT 10")
-    logs = cursor.fetchall()
-    conn.close()
-
-    if not logs:
-        bot.reply_to(message, "📜 Hozircha yuklamalar tarixi yo'q.")
-        return
-
-    text = "📜 **Oxirgi 10 ta yuklama tarixi:**\n\n"
-    for uname, content, dt in logs:
-        text += f"👤 {uname}\n📥 {content}\n🕒 {dt}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-    bot.reply_to(message, text)
-
 @bot.message_handler(commands=['about', 'info'])
 @bot.message_handler(func=lambda message: message.text == "ℹ️ Bot haqida va imkoniyatlar")
 def send_about(message):
@@ -224,7 +208,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.3 Ultra Fast"
+        "🚀 **Versiya:** 3.4 Pro"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -246,28 +230,38 @@ def handle_save_video(call):
     except Exception:
         bot.answer_callback_query(call.id, "❌ Saqlashda xatolik yuz berdi.", show_alert=True)
 
-# VIDEODAN MUSIQA AJRATISH HANDLERI
+# VIDEODAN MUSIQA AJRATISH HANDLERI (XATOSIZ)
 @bot.callback_query_handler(func=lambda call: call.data.startswith("get_audio_"))
 def handle_get_audio(call):
-    msg_id = call.data.replace("get_audio_", "")
+    video_url = call.data.replace("get_audio_", "").replace("___", "/")
     bot.answer_callback_query(call.id, "🎵 Qo'shiq ajratib olinmoqda...")
     status_audio = bot.send_message(call.message.chat.id, "⏳ Audio tayyorlanmoqda...")
 
-    temp_video = f"temp_{msg_id}.mp4"
-    temp_audio = f"audio_{msg_id}.mp3"
+    temp_audio = f"audio_{call.message.message_id}.mp3"
 
     try:
-        # Videoni qayta yuklab olish
-        file_info = bot.get_file(call.message.video.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        # Bevosita havola orqali yt-dlp yordamida audioni sifatli yuklab olish
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_audio.replace('.mp3', ''),
+            'quiet': True,
+            'no_warnings': True,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
 
-        with open(temp_video, 'wb') as f:
-            f.write(downloaded_file)
+        if not os.path.exists(temp_audio):
+            # Muqobil nom bilan qidirish
+            alt_name = temp_audio.replace('.mp3', '') + ".mp3"
+            if os.path.exists(alt_name):
+                temp_audio = alt_name
 
-        # FFmpeg orqali audioni uzib olish
-        os.system(f"ffmpeg -i {temp_video} -q:a 0 -map a {temp_audio} -y")
-
-        if os.path.exists(temp_audio) and os.path.getsize(temp_audio) > 0:
+        if os.path.exists(temp_audio) and os.path.getsize(temp_audio) > 1000:
             bot_info = bot.get_me()
             inline_markup = types.InlineKeyboardMarkup()
             btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
@@ -280,20 +274,18 @@ def handle_get_audio(call):
                     caption=f"📥 @{bot_info.username} orqali yuklab olindi",
                     reply_markup=inline_markup
                 )
-            log_download(call.message.chat.id, call.from_user.username, "Video Audio-si")
+            log_download(call.message.chat.id, call.from_user.username, "Video Audiosi")
         else:
-            bot.send_message(call.message.chat.id, "❌ Ushbu videoda ovoz yo'q yoki ajratib bo'lmadi.")
+            bot.send_message(call.message.chat.id, "❌ Ushbu videoda audio trek topilmadi.")
 
-    except Exception as e:
-        bot.send_message(call.message.chat.id, "❌ Audioni ajratishda xatolik yuz berdi.")
+    except Exception:
+        bot.send_message(call.message.chat.id, "❌ Audioni ajratib olishda xatolik yuz berdi.")
 
     finally:
         try:
             bot.delete_message(chat_id=call.message.chat.id, message_id=status_audio.message_id)
         except Exception:
             pass
-        if os.path.exists(temp_video):
-            os.remove(temp_video)
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
 
@@ -316,7 +308,7 @@ def handle_message(message):
 
     # 1. INSTAGRAM & TIKTOK VIDEO YUKLASH
     if "instagram.com" in text or "tiktok.com" in text:
-        status_msg = bot.reply_to(message, "⏳ Video yuklanmoqda, kuting...")
+        status_msg = bot.send_message(message.chat.id, "⏳ Video yuklanmoqda, kuting...")
         video_path = f"video_{message.message_id}.mp4"
 
         try:
@@ -326,8 +318,13 @@ def handle_message(message):
                 bot_info = bot.get_me()
                 inline_markup = types.InlineKeyboardMarkup(row_width=1)
                 
+                # Url variantini callback_data ichiga xavfsiz joylash
+                safe_url = text.replace("/", "___")
+                if len(safe_url) > 50:
+                    safe_url = safe_url[:50]
+
                 btn_save = types.InlineKeyboardButton("💾 Saqlash", callback_data="save_video")
-                btn_audio = types.InlineKeyboardButton("📥 Qo'shiqni yuklab olish", callback_data=f"get_audio_{message.message_id}")
+                btn_audio = types.InlineKeyboardButton("📥 Qo'shiqni yuklab olish", callback_data=f"get_audio_{safe_url}")
                 btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
                 
                 inline_markup.add(btn_save, btn_audio, btn_group)
@@ -342,17 +339,20 @@ def handle_message(message):
                     )
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
 
-                # "⏳ Video yuklanmoqda" xabarini ZUDLIK BILAN o'chirish
+                # MATNLI XABARNI MUVAFFAQIYATLI O'CHIRISH
                 try:
                     bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
                 except Exception:
                     pass
 
             else:
-                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Video shaxsiy (private) akkauntdan bo'lishi yoki o'chirilgan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
+                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Link yopiq yoki o'chirilgan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
         except Exception:
-            bot.edit_message_text("❌ Videoni yuklashda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            try:
+                bot.edit_message_text("❌ Videoni yuklashda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            except Exception:
+                pass
 
         finally:
             if os.path.exists(video_path):
@@ -360,7 +360,7 @@ def handle_message(message):
 
     # 2. QO'SHIQ QIDIRUVI (DEEZER)
     else:
-        status_msg = bot.reply_to(message, f"🔍 **{text}** qidirilmoqda...", parse_mode="Markdown")
+        status_msg = bot.send_message(message.chat.id, f"🔍 **{text}** qidirilmoqda...", parse_mode="Markdown")
         try:
             query = urllib.parse.quote(text)
             url = f"https://api.deezer.com/search?q={query}&limit=5"
