@@ -5,6 +5,7 @@ import threading
 import urllib.parse
 import urllib.request
 import json
+from datetime import datetime
 from flask import Flask
 import telebot
 from telebot import types
@@ -27,20 +28,45 @@ bot = telebot.TeleBot(TOKEN)
 DB_NAME = "bot_data.db"
 user_search_results = {}
 
+# BAZA VA LOGLAR TABLE
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS channels (channel_id TEXT PRIMARY KEY, channel_url TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT, content TEXT, created_at TEXT)''')
     conn.commit()
     conn.close()
 
-def add_user(user_id):
+def add_user(user_id, username):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    uname = f"@{username}" if username else "Mavjud emas"
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, username) VALUES (?, ?)", (user_id, uname))
     conn.commit()
     conn.close()
+
+def log_download(user_id, username, content):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    uname = f"@{username}" if username else "Mavjud emas"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("INSERT INTO logs (user_id, username, content, created_at) VALUES (?, ?, ?, ?)", (user_id, uname, content, now))
+    conn.commit()
+    conn.close()
+
+    # Admintga real-vaqt rejimida bildirgi yuborish
+    if ADMIN_ID != 0:
+        try:
+            admin_msg = (
+                f"📥 **Yangi yuklama!**\n\n"
+                f"👤 **Foydalanuvchi:** {uname} (ID: `{user_id}`)\n"
+                f"🎵/🎬 **Yukladi:** {content}\n"
+                f"🕒 **Vaqt:** {now}"
+            )
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
+        except Exception:
+            pass
 
 def get_all_users():
     conn = sqlite3.connect(DB_NAME)
@@ -96,7 +122,7 @@ def format_duration(seconds):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    add_user(message.chat.id)
+    add_user(message.chat.id, message.from_user.username)
     unsub = check_sub(message.chat.id)
     if unsub:
         bot.send_message(
@@ -113,16 +139,57 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard())
 
+# ADMIN BUYRUQLARI
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    admin_text = (
+        "🛠 **Admin Panel Buyruqlari:**\n\n"
+        "📊 `/stat` - Foydalanuvchilar soni\n"
+        "📜 `/logs` - Oxirgi yuklangan 10 ta media tarixi\n"
+        "📢 `/rek` - Reklama tarqatish (Reply qilib)\n"
+        "➕ `/add_channel @username link` - Obuna kanali qo'shish\n"
+        "➖ `/del_channel @username` - Kanalni o'chirish"
+    )
+    bot.reply_to(message, admin_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['stat'])
+def send_stats(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    users = get_all_users()
+    bot.reply_to(message, f"📊 Botingizda **{len(users)}** ta foydalanuvchi bor!", parse_mode="Markdown")
+
+@bot.message_handler(commands=['logs'])
+def send_logs(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, content, created_at FROM logs ORDER BY id DESC LIMIT 10")
+    logs = cursor.fetchall()
+    conn.close()
+
+    if not logs:
+        bot.reply_to(message, "📜 Hozircha yuklamalar tarixi yo'q.")
+        return
+
+    text = "📜 **Oxirgi 10 ta yuklama tarixi:**\n\n"
+    for uname, content, dt in logs:
+        text += f"👤 {uname}\n📥 {content}\n🕒 {dt}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+    bot.reply_to(message, text)
+
 @bot.message_handler(commands=['about', 'info'])
 @bot.message_handler(func=lambda message: message.text == "ℹ️ Bot haqida va imkoniyatlar")
 def send_about(message):
-    add_user(message.chat.id)
+    add_user(message.chat.id, message.from_user.username)
     about_text = (
         "🤖 **Bot haqida ma'lumot:**\n\n"
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va oson yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 2.3 Pro"
+        "🚀 **Versiya:** 2.4 Pro"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -138,7 +205,7 @@ def cb_check_sub(call):
 # ASOSIY MESSAGES HANDLER
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    add_user(message.chat.id)
+    add_user(message.chat.id, message.from_user.username)
 
     unsub = check_sub(message.chat.id)
     if unsub:
@@ -189,6 +256,8 @@ def handle_message(message):
                         caption=f"🎬 {title}\n\n🤖 Bot: InstaSave Bot",
                         reply_markup=inline_markup
                     )
+                # LOG YOZISH VA ADMINGA XABAR
+                log_download(message.chat.id, message.from_user.username, f"Video: {text}")
 
         except Exception:
             bot.send_message(message.chat.id, "❌ Video yuklab bo'lmadi.")
@@ -265,7 +334,6 @@ def handle_deezer_download(call):
     audio_file_base = f"audio_{call.message.message_id}"
 
     try:
-        # FFmpeg talab qilmaydigan to'g'ridan-to'g'ri audio yuklash sozlamalari
         ydl_opts = {
             'format': 'm4a/bestaudio/best',
             'outtmpl': f"{audio_file_base}.%(ext)s",
@@ -304,6 +372,8 @@ def handle_deezer_download(call):
                     reply_markup=inline_markup
                 )
             os.remove(downloaded_file)
+            # LOG YOZISH VA ADMINGA XABAR
+            log_download(chat_id, call.from_user.username, f"Qo'shiq: {artist} - {title}")
         else:
             bot.send_message(chat_id, "❌ Qo'shiq fayli topilmadi.")
 
@@ -313,63 +383,6 @@ def handle_deezer_download(call):
     finally:
         try:
             bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
-        except Exception:
-            pass
-
-# INSTAGRAM REELS AUDIOSINI YUKLASH
-@bot.callback_query_handler(func=lambda call: call.data.startswith('aud_'))
-def handle_audio_download(call):
-    bot.answer_callback_query(call.id, "🎵 Qo'shiq yuklanmoqda...")
-    shortcode = call.data.replace('aud_', '')
-    insta_url = f"https://www.instagram.com/p/{shortcode}/"
-
-    status_msg = bot.send_message(call.message.chat.id, "⏳ Qo'shiq ajratib olinmoqda...")
-    audio_file_base = f"insta_audio_{call.message.message_id}"
-
-    try:
-        ydl_opts = {
-            'format': 'm4a/bestaudio/best',
-            'outtmpl': f"{audio_file_base}.%(ext)s",
-            'quiet': True,
-            'no_warnings': True,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            }
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(insta_url, download=True)
-            title = info.get('title', 'Instagram Audio')
-
-        downloaded_file = None
-        for file in os.listdir('.'):
-            if file.startswith(audio_file_base):
-                downloaded_file = file
-                break
-
-        bot_info = bot.get_me()
-        inline_markup = types.InlineKeyboardMarkup()
-        btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
-        inline_markup.add(btn_group)
-
-        if downloaded_file and os.path.exists(downloaded_file):
-            with open(downloaded_file, 'rb') as a:
-                bot.send_audio(
-                    call.message.chat.id,
-                    a,
-                    caption=f"🎵 **{title}**\n\n🤖 Bot: InstaSave Bot",
-                    parse_mode="Markdown",
-                    reply_markup=inline_markup
-                )
-            os.remove(downloaded_file)
-        else:
-            bot.send_message(call.message.chat.id, "❌ Qo'shiq fayli topilmadi.")
-
-    except Exception:
-        bot.send_message(call.message.chat.id, "❌ Qo'shiqni yuklab bo'lmadi.")
-
-    finally:
-        try:
-            bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
         except Exception:
             pass
 
