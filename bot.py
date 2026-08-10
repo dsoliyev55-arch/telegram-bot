@@ -173,8 +173,9 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
+# BOT HAQIDA BUYRUG'I (XATOLIK TUZATILDI)
 @bot.message_handler(commands=['about', 'info'])
-@bot.message_handler(func=lambda message: message.text == "ℹ️ Bot haqida va imkoniyatlar")
+@bot.message_handler(func=lambda message: "bot haqida" in message.text.lower())
 def send_about(message):
     add_user(message.chat.id, message.from_user.username)
     about_text = (
@@ -207,7 +208,7 @@ def handle_save_video(call):
     except Exception:
         bot.answer_callback_query(call.id, "❌ Saqlashda xatolik yuz berdi.", show_alert=True)
 
-# VIDEODAN MUSIQA AJRATISH HANDLERI (TOZA O'CHIRISH BILAN)
+# VIDEODAN MUSIQA AJRATISH HANDLERI
 @bot.callback_query_handler(func=lambda call: call.data.startswith("get_audio_"))
 def handle_get_audio(call):
     msg_id_str = call.data.replace("get_audio_", "")
@@ -235,7 +236,6 @@ def handle_get_audio(call):
         cmd = [ffmpeg_exe, "-y", "-i", temp_video, "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", temp_audio]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # KAFOLATLANGAN TOZA O'CHIRISH (Audio yuborishdan oldin)
         try:
             bot.delete_message(chat_id=call.message.chat.id, message_id=status_audio.message_id)
         except Exception:
@@ -247,7 +247,6 @@ def handle_get_audio(call):
             btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
             inline_markup.add(btn_group)
 
-            # Reply qilmasdan toza yuborish
             with open(temp_audio, 'rb') as aud:
                 bot.send_audio(
                     call.message.chat.id,
@@ -297,7 +296,6 @@ def handle_message(message):
         try:
             success = download_insta_video(text, video_path)
 
-            # KAFOLATLANGAN TOZA O'CHIRISH (Videoni yuborishdan OLDIN)
             try:
                 bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
             except Exception:
@@ -313,7 +311,6 @@ def handle_message(message):
                 
                 inline_markup.add(btn_save, btn_audio, btn_group)
 
-                # Videoni toza yuborish (eski xabarga reply qilmasdan)
                 with open(video_path, 'rb') as v:
                     bot.send_video(
                         message.chat.id,
