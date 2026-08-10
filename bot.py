@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from flask import Flask
 import telebot
@@ -35,6 +36,10 @@ def get_main_keyboard():
     btn_info = types.KeyboardButton("ℹ️ Bot haqida va imkoniyatlar")
     markup.add(btn_info)
     return markup
+
+def extract_shortcode(url):
+    match = re.search(r'instagram\.com/(?:p|reel|reels|tv)/([^/?#&]+)', url)
+    return match.group(1) if match else None
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -79,6 +84,7 @@ def handle_message(message):
 
     status_msg = bot.reply_to(message, "⏳ Video yuklanmoqda, kuting...")
     video_file = f"video_{message.message_id}.mp4"
+    shortcode = extract_shortcode(url)
 
     try:
         ydl_opts = {
@@ -93,9 +99,24 @@ def handle_message(message):
 
         bot.edit_message_text("⬆️ Telegram'ga yuklanmoqda...", chat_id=message.chat.id, message_id=status_msg.message_id)
 
+        # Inline tugmalarni shakllantirish
+        inline_markup = types.InlineKeyboardMarkup()
+        if shortcode:
+            btn_audio = types.InlineKeyboardButton("🎵 Qo'shiqni yuklab olish", callback_data=f"aud_{shortcode}")
+            inline_markup.add(btn_audio)
+        
+        bot_info = bot.get_me()
+        btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
+        inline_markup.add(btn_group)
+
         if os.path.exists(video_file):
             with open(video_file, 'rb') as v:
-                bot.send_video(message.chat.id, v, caption=f"🎬 {title}\n\n👤 Ega: Soliyev Davronbek\n🤖 Bot: InstaSave Bot")
+                bot.send_video(
+                    message.chat.id, 
+                    v, 
+                    caption=f"🎬 {title}\n\n👤 Ega: Soliyev Davronbek\n🤖 Bot: InstaSave Bot",
+                    reply_markup=inline_markup
+                )
 
         bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
 
@@ -105,6 +126,45 @@ def handle_message(message):
     finally:
         if os.path.exists(video_file):
             os.remove(video_file)
+
+# "Qo'shiqni yuklab olish" tugmasi bosilganda ishlaydigan bo'lim
+@bot.callback_query_handler(func=lambda call: call.data.startswith('aud_'))
+def handle_audio_download(call):
+    bot.answer_callback_query(call.id, "🎵 Audio ajratib olinmoqda...")
+    shortcode = call.data.replace('aud_', '')
+    insta_url = f"https://www.instagram.com/reel/{shortcode}/"
+    
+    status_msg = bot.send_message(call.message.chat.id, "⏳ Qo'shiq yuklanmoqda...")
+    audio_file_pattern = f"audio_{call.message.message_id}"
+
+    try:
+        ydl_opts = {
+            'format': 'm4a/bestaudio/best',
+            'outtmpl': f"{audio_file_pattern}.%(ext)s",
+            'quiet': True,
+            'no_warnings': True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(insta_url, download=True)
+            ext = info.get('ext', 'm4a')
+            title = info.get('title', 'Instagram Audio')
+
+        final_audio_path = f"{audio_file_pattern}.{ext}"
+
+        if os.path.exists(final_audio_path):
+            with open(final_audio_path, 'rb') as a:
+                bot.send_audio(
+                    call.message.chat.id,
+                    a,
+                    caption=f"🎵 {title}\n\n👤 Ega: Soliyev Davronbek\n🤖 Bot: InstaSave Bot",
+                    reply_to_message_id=call.message.message_id
+                )
+            os.remove(final_audio_path)
+
+        bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
+
+    except Exception as e:
+        bot.edit_message_text(f"❌ Audioni yuklab bo'lmadi:\n{str(e)}", chat_id=call.message.chat.id, message_id=status_msg.message_id)
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
