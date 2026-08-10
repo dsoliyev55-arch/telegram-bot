@@ -114,23 +114,51 @@ def format_duration(seconds):
     secs = seconds % 60
     return f"{mins}:{secs:02d}"
 
-# COBALT API ORQALI MEDIA YUKLAB OLISH
-def fetch_cobalt_media(url, is_audio=False):
-    api_url = "https://api.cobalt.tools/api/json"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0"
-    }
-    payload = {
-        "url": url,
-        "isAudioOnly": is_audio,
-        "aFormat": "mp3"
-    }
-    req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        res_data = json.loads(resp.read().decode('utf-8'))
-        return res_data.get('url')
+# HAVOLADAGI ORTIQCHA PARAMETRLARNI TOZALASH FUNKSIYASI
+def clean_url(url):
+    clean = re.sub(r'\?.*$', '', url.strip())
+    if not clean.endswith('/'):
+        clean += '/'
+    return clean
+
+# MEDIA YUKLASH (COBALT & FALLBACK API)
+def fetch_download_url(url, is_audio=False):
+    c_url = clean_url(url)
+    
+    # 1-URANISH: Cobalt API
+    try:
+        api_url = "https://api.cobalt.tools/api/json"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+        payload = {
+            "url": c_url,
+            "isAudioOnly": is_audio,
+            "aFormat": "mp3"
+        }
+        req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res_data = json.loads(resp.read().decode('utf-8'))
+            dl_link = res_data.get('url')
+            if dl_link:
+                return dl_link
+    except Exception:
+        pass
+
+    # 2-URANISH (FALLBACK API): SnapSave / Direct Extractor
+    try:
+        fallback_api = f"https://api.vkrnot.com/api/instagram?url={urllib.parse.quote(c_url)}"
+        req = urllib.request.Request(fallback_api, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res_data = json.loads(resp.read().decode('utf-8'))
+            if res_data.get("status") and res_data.get("data"):
+                return res_data["data"][0].get("url")
+    except Exception:
+        pass
+
+    return None
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -147,12 +175,11 @@ def send_welcome(message):
 
     welcome_text = (
         "✨ **InstaSave Bot-ga xush kelibsiz!** ✨\n\n"
-        "🎬 Instagram/TikTok havolalarini yuboring — video va audiosini yuklab beraman.\n"
+        "🎬 Instagram/TikTok havolasini yuboring — video va audiosini yuklab beraman.\n"
         "🎵 Yoki qo'shiq nomini yozing — to'liq versiyasini topib beraman!"
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-# ADMIN PANEL
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.chat.id != ADMIN_ID:
@@ -199,7 +226,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.0 Ultra Fast"
+        "🚀 **Versiya:** 3.1 Pro"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -212,7 +239,7 @@ def cb_check_sub(call):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id, "✅ Obuna tasdiqlandi! Endi botdan to'liq foydalanishingiz mumkin.", reply_markup=get_main_keyboard())
 
-# ASOSIY ISHLOVCHI HANDLER
+# ASOSIY MESSAGES HANDLER
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     add_user(message.chat.id, message.from_user.username)
@@ -233,13 +260,12 @@ def handle_message(message):
     if "instagram.com" in text or "tiktok.com" in text:
         status_msg = bot.reply_to(message, "⏳ Video yuklanmoqda, kuting...")
         try:
-            download_url = fetch_cobalt_media(text, is_audio=False)
+            download_url = fetch_download_url(text, is_audio=False)
             
             if download_url:
                 bot_info = bot.get_me()
                 inline_markup = types.InlineKeyboardMarkup()
                 
-                # Audio va guruhga qo'shish tugmalari
                 btn_audio = types.InlineKeyboardButton("🎵 Qo'shiqni yuklab olish", callback_data=f"cob_aud_{urllib.parse.quote_plus(text)}")
                 btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
                 inline_markup.add(btn_audio)
@@ -252,18 +278,17 @@ def handle_message(message):
                     reply_markup=inline_markup
                 )
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
+                
+                # Video jo'natilgandan so'ng "yuklanmoqda" xabarini o'chirish
+                try:
+                    bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+                except Exception:
+                    pass
             else:
-                bot.send_message(message.chat.id, "❌ Video faylini yuklab bo'lmadi.")
+                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Video shaxsiy (private) akkauntdan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
-        except Exception as e:
-            bot.send_message(message.chat.id, "❌ Videoni yuklashda xatolik yuz berdi. Havolani qayta tekshiring.")
-
-        finally:
-            # Kutish xabarini o'chirish
-            try:
-                bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
-            except Exception:
-                pass
+        except Exception:
+            bot.edit_message_text("❌ Videoni yuklashda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
     # 2. QO'SHIQ QIDIRUVI (DEEZER)
     else:
@@ -321,7 +346,7 @@ def handle_deezer_download(call):
     track = user_search_results[chat_id][idx]
     artist = track['artist']['name']
     title = track['title']
-    preview_url = track['preview'] # Deezer audio preview / to'liq oqim
+    preview_url = track['preview']
 
     bot.answer_callback_query(call.id, f"🎵 {title} yuklanmoqda...")
     status_msg = bot.send_message(chat_id, f"⏳ **{artist} — {title}** yuklanmoqda...")
@@ -340,17 +365,16 @@ def handle_deezer_download(call):
             reply_markup=inline_markup
         )
         log_download(chat_id, call.from_user.username, f"Qo'shiq: {artist} - {title}")
-
-    except Exception:
-        bot.send_message(chat_id, "❌ Qo'shiqni yuklab bo'lmadi.")
-
-    finally:
+        
         try:
             bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         except Exception:
             pass
 
-# INSTAGRAM / TIKTOK REELS AUDIOSINI COBALT ORQALI YUKLASH
+    except Exception:
+        bot.send_message(chat_id, "❌ Qo'shiqni yuklab bo'lmadi.")
+
+# REELS AUDIOSINI YUKLASH TUGMASI
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cob_aud_'))
 def handle_cobalt_audio(call):
     bot.answer_callback_query(call.id, "🎵 Qo'shiq ajratib olinmoqda...")
@@ -358,7 +382,7 @@ def handle_cobalt_audio(call):
     status_msg = bot.send_message(call.message.chat.id, "⏳ Audio yuklanmoqda...")
 
     try:
-        audio_url = fetch_cobalt_media(target_url, is_audio=True)
+        audio_url = fetch_download_url(target_url, is_audio=True)
         if audio_url:
             bot_info = bot.get_me()
             inline_markup = types.InlineKeyboardMarkup()
@@ -372,17 +396,16 @@ def handle_cobalt_audio(call):
                 reply_markup=inline_markup
             )
             log_download(call.message.chat.id, call.from_user.username, f"Audio: {target_url}")
+            
+            try:
+                bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
+            except Exception:
+                pass
         else:
-            bot.send_message(call.message.chat.id, "❌ Audioni ajratish imkoni bo'lmadi.")
+            bot.edit_message_text("❌ Audioni ajratish imkoni bo'lmadi.", chat_id=call.message.chat.id, message_id=status_msg.message_id)
 
     except Exception:
-        bot.send_message(call.message.chat.id, "❌ Audioni yuklashda xatolik berdi.")
-
-    finally:
-        try:
-            bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
-        except Exception:
-            pass
+        bot.edit_message_text("❌ Audioni yuklashda xatolik yuz berdi.", chat_id=call.message.chat.id, message_id=status_msg.message_id)
 
 if __name__ == "__main__":
     init_db()
