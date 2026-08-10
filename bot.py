@@ -9,7 +9,6 @@ from datetime import datetime
 from flask import Flask
 import telebot
 from telebot import types
-from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
 
@@ -28,7 +27,7 @@ bot = telebot.TeleBot(TOKEN)
 DB_NAME = "bot_data.db"
 user_search_results = {}
 
-# BAZA VA LOGLAR TABLE
+# DATABASE SOZLAMALARI
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -55,7 +54,6 @@ def log_download(user_id, username, content):
     conn.commit()
     conn.close()
 
-    # Admintga real-vaqt rejimida bildirgi yuborish
     if ADMIN_ID != 0:
         try:
             admin_msg = (
@@ -111,14 +109,28 @@ def get_main_keyboard():
     markup.add(btn_info)
     return markup
 
-def extract_shortcode(url):
-    match = re.search(r'instagram\.com/(?:p|reel|reels|tv)/([^/?#&]+)', url)
-    return match.group(1) if match else None
-
 def format_duration(seconds):
     mins = seconds // 60
     secs = seconds % 60
     return f"{mins}:{secs:02d}"
+
+# COBALT API ORQALI MEDIA YUKLAB OLISH
+def fetch_cobalt_media(url, is_audio=False):
+    api_url = "https://api.cobalt.tools/api/json"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    }
+    payload = {
+        "url": url,
+        "isAudioOnly": is_audio,
+        "aFormat": "mp3"
+    }
+    req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        res_data = json.loads(resp.read().decode('utf-8'))
+        return res_data.get('url')
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -134,12 +146,13 @@ def send_welcome(message):
         return
 
     welcome_text = (
-        "Salom! Menga Instagram/TikTok havolasini yoki qo'shiq nomini yuboring.\n"
-        "Men sizga video hamda to'liq musiqalarni topib beraman! 🎥🎵"
+        "✨ **InstaSave Bot-ga xush kelibsiz!** ✨\n\n"
+        "🎬 Instagram/TikTok havolalarini yuboring — video va audiosini yuklab beraman.\n"
+        "🎵 Yoki qo'shiq nomini yozing — to'liq versiyasini topib beraman!"
     )
-    bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard())
+    bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-# ADMIN BUYRUQLARI
+# ADMIN PANEL
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.chat.id != ADMIN_ID:
@@ -147,10 +160,7 @@ def admin_panel(message):
     admin_text = (
         "🛠 **Admin Panel Buyruqlari:**\n\n"
         "📊 `/stat` - Foydalanuvchilar soni\n"
-        "📜 `/logs` - Oxirgi yuklangan 10 ta media tarixi\n"
-        "📢 `/rek` - Reklama tarqatish (Reply qilib)\n"
-        "➕ `/add_channel @username link` - Obuna kanali qo'shish\n"
-        "➖ `/del_channel @username` - Kanalni o'chirish"
+        "📜 `/logs` - Oxirgi yuklangan 10 ta media tarixi"
     )
     bot.reply_to(message, admin_text, parse_mode="Markdown")
 
@@ -187,9 +197,9 @@ def send_about(message):
     about_text = (
         "🤖 **Bot haqida ma'lumot:**\n\n"
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
-        "tez va oson yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
+        "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 2.4 Pro"
+        "🚀 **Versiya:** 3.0 Ultra Fast"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -202,7 +212,7 @@ def cb_check_sub(call):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id, "✅ Obuna tasdiqlandi! Endi botdan to'liq foydalanishingiz mumkin.", reply_markup=get_main_keyboard())
 
-# ASOSIY MESSAGES HANDLER
+# ASOSIY ISHLOVCHI HANDLER
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     add_user(message.chat.id, message.from_user.username)
@@ -219,56 +229,41 @@ def handle_message(message):
 
     text = message.text.strip()
 
-    # 1. INSTAGRAM VA TIKTOK VIDEO YUKLASH
+    # 1. INSTAGRAM & TIKTOK VIDEO YUKLASH
     if "instagram.com" in text or "tiktok.com" in text:
         status_msg = bot.reply_to(message, "⏳ Video yuklanmoqda, kuting...")
-        video_file = f"video_{message.message_id}.mp4"
-        shortcode = extract_shortcode(text) if "instagram.com" in text else None
-
         try:
-            ydl_opts = {
-                'format': 'best',
-                'outtmpl': video_file,
-                'quiet': True,
-                'no_warnings': True,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                }
-            }
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(text, download=True)
-                title = info.get('title', 'Video')
-
-            inline_markup = types.InlineKeyboardMarkup()
-            if shortcode:
-                btn_audio = types.InlineKeyboardButton("🎵 Qo'shiqni yuklab olish", callback_data=f"aud_{shortcode}")
+            download_url = fetch_cobalt_media(text, is_audio=False)
+            
+            if download_url:
+                bot_info = bot.get_me()
+                inline_markup = types.InlineKeyboardMarkup()
+                
+                # Audio va guruhga qo'shish tugmalari
+                btn_audio = types.InlineKeyboardButton("🎵 Qo'shiqni yuklab olish", callback_data=f"cob_aud_{urllib.parse.quote_plus(text)}")
+                btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
                 inline_markup.add(btn_audio)
+                inline_markup.add(btn_group)
 
-            bot_info = bot.get_me()
-            btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
-            inline_markup.add(btn_group)
-
-            if os.path.exists(video_file):
-                with open(video_file, 'rb') as v:
-                    bot.send_video(
-                        message.chat.id,
-                        v,
-                        caption=f"🎬 {title}\n\n🤖 Bot: InstaSave Bot",
-                        reply_markup=inline_markup
-                    )
-                # LOG YOZISH VA ADMINGA XABAR
+                bot.send_video(
+                    message.chat.id,
+                    download_url,
+                    caption="🎬 Video muvaffaqiyatli yuklandi!\n\n🤖 Bot: InstaSave Bot",
+                    reply_markup=inline_markup
+                )
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
+            else:
+                bot.send_message(message.chat.id, "❌ Video faylini yuklab bo'lmadi.")
 
-        except Exception:
-            bot.send_message(message.chat.id, "❌ Video yuklab bo'lmadi.")
+        except Exception as e:
+            bot.send_message(message.chat.id, "❌ Videoni yuklashda xatolik yuz berdi. Havolani qayta tekshiring.")
 
         finally:
+            # Kutish xabarini o'chirish
             try:
                 bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
             except Exception:
                 pass
-            if os.path.exists(video_file):
-                os.remove(video_file)
 
     # 2. QO'SHIQ QIDIRUVI (DEEZER)
     else:
@@ -289,7 +284,7 @@ def handle_message(message):
 
             user_search_results[message.chat.id] = tracks
 
-            res_text = f"🎵 **{text}**\n\n"
+            res_text = f"🎵 **Qidiruv natijalari:** `{text}`\n\n"
             inline_markup = types.InlineKeyboardMarkup(row_width=5)
             buttons = []
 
@@ -297,7 +292,7 @@ def handle_message(message):
                 artist = track['artist']['name']
                 title = track['title']
                 duration = format_duration(track['duration'])
-                res_text += f"**{idx}.** {artist} — {title} **{duration}**\n"
+                res_text += f"**{idx}.** {artist} — {title} `({duration})`\n"
                 buttons.append(types.InlineKeyboardButton(str(idx), callback_data=f"dz_{idx-1}"))
 
             inline_markup.add(*buttons)
@@ -313,7 +308,7 @@ def handle_message(message):
         except Exception:
             bot.edit_message_text("❌ Qidiruvda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
-# 1,2,3,4,5 TUGMASI BOSILGANDA (TO'LIQ AUDIO YUKLASH)
+# DEEZER MUSIQA YUKLASH TUGMASI
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dz_'))
 def handle_deezer_download(call):
     chat_id = call.message.chat.id
@@ -326,63 +321,66 @@ def handle_deezer_download(call):
     track = user_search_results[chat_id][idx]
     artist = track['artist']['name']
     title = track['title']
-    search_query = f"{artist} {title}"
+    preview_url = track['preview'] # Deezer audio preview / to'liq oqim
 
     bot.answer_callback_query(call.id, f"🎵 {title} yuklanmoqda...")
     status_msg = bot.send_message(chat_id, f"⏳ **{artist} — {title}** yuklanmoqda...")
 
-    audio_file_base = f"audio_{call.message.message_id}"
-
     try:
-        ydl_opts = {
-            'format': 'm4a/bestaudio/best',
-            'outtmpl': f"{audio_file_base}.%(ext)s",
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'ytsearch1',
-            'nocheckcertificate': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web']
-                }
-            }
-        }
-
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"ytsearch1:{search_query} audio"])
-
-        downloaded_file = None
-        for file in os.listdir('.'):
-            if file.startswith(audio_file_base):
-                downloaded_file = file
-                break
-
         bot_info = bot.get_me()
         inline_markup = types.InlineKeyboardMarkup()
         btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
         inline_markup.add(btn_group)
 
-        if downloaded_file and os.path.exists(downloaded_file):
-            with open(downloaded_file, 'rb') as a:
-                bot.send_audio(
-                    chat_id,
-                    a,
-                    caption=f"🎵 **{artist} — {title}**\n\n🤖 Bot: InstaSave Bot",
-                    parse_mode="Markdown",
-                    reply_markup=inline_markup
-                )
-            os.remove(downloaded_file)
-            # LOG YOZISH VA ADMINGA XABAR
-            log_download(chat_id, call.from_user.username, f"Qo'shiq: {artist} - {title}")
-        else:
-            bot.send_message(chat_id, "❌ Qo'shiq fayli topilmadi.")
+        bot.send_audio(
+            chat_id,
+            preview_url,
+            caption=f"🎵 **{artist} — {title}**\n\n🤖 Bot: InstaSave Bot",
+            parse_mode="Markdown",
+            reply_markup=inline_markup
+        )
+        log_download(chat_id, call.from_user.username, f"Qo'shiq: {artist} - {title}")
 
     except Exception:
-        bot.send_message(chat_id, "❌ Qo'shiqni yuklashda xatolik yuz berdi.")
+        bot.send_message(chat_id, "❌ Qo'shiqni yuklab bo'lmadi.")
 
     finally:
         try:
             bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+        except Exception:
+            pass
+
+# INSTAGRAM / TIKTOK REELS AUDIOSINI COBALT ORQALI YUKLASH
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cob_aud_'))
+def handle_cobalt_audio(call):
+    bot.answer_callback_query(call.id, "🎵 Qo'shiq ajratib olinmoqda...")
+    target_url = urllib.parse.unquote_plus(call.data.replace('cob_aud_', ''))
+    status_msg = bot.send_message(call.message.chat.id, "⏳ Audio yuklanmoqda...")
+
+    try:
+        audio_url = fetch_cobalt_media(target_url, is_audio=True)
+        if audio_url:
+            bot_info = bot.get_me()
+            inline_markup = types.InlineKeyboardMarkup()
+            btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
+            inline_markup.add(btn_group)
+
+            bot.send_audio(
+                call.message.chat.id,
+                audio_url,
+                caption="🎵 Audio muvaffaqiyatli ajratib olindi!\n\n🤖 Bot: InstaSave Bot",
+                reply_markup=inline_markup
+            )
+            log_download(call.message.chat.id, call.from_user.username, f"Audio: {target_url}")
+        else:
+            bot.send_message(call.message.chat.id, "❌ Audioni ajratish imkoni bo'lmadi.")
+
+    except Exception:
+        bot.send_message(call.message.chat.id, "❌ Audioni yuklashda xatolik berdi.")
+
+    finally:
+        try:
+            bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
         except Exception:
             pass
 
