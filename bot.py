@@ -9,6 +9,7 @@ from datetime import datetime
 from flask import Flask
 import telebot
 from telebot import types
+from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
 
@@ -114,51 +115,62 @@ def format_duration(seconds):
     secs = seconds % 60
     return f"{mins}:{secs:02d}"
 
-# HAVOLADAGI ORTIQCHA PARAMETRLARNI TOZALASH FUNKSIYASI
 def clean_url(url):
     clean = re.sub(r'\?.*$', '', url.strip())
     if not clean.endswith('/'):
         clean += '/'
     return clean
 
-# MEDIA YUKLASH (COBALT & FALLBACK API)
-def fetch_download_url(url, is_audio=False):
+# INSTAGRAM VIDEO YUKLASH TIZIMI (MULTIPLE SOURCES)
+def download_insta_video(url, output_path):
     c_url = clean_url(url)
     
-    # 1-URANISH: Cobalt API
+    # METHOD 1: DDINSTAGRAM FIX
     try:
-        api_url = "https://api.cobalt.tools/api/json"
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-        payload = {
-            "url": c_url,
-            "isAudioOnly": is_audio,
-            "aFormat": "mp3"
-        }
-        req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
+        dd_url = c_url.replace("instagram.com", "ddinstagram.com")
+        req = urllib.request.Request(dd_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            res_data = json.loads(resp.read().decode('utf-8'))
-            dl_link = res_data.get('url')
-            if dl_link:
-                return dl_link
+            html = resp.read().decode('utf-8')
+            video_match = re.search(r'<meta property="og:video" content="([^"]+)"', html)
+            if video_match:
+                video_url = video_match.group(1).replace('&amp;', '&')
+                urllib.request.urlretrieve(video_url, output_path)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                    return True
     except Exception:
         pass
 
-    # 2-URANISH (FALLBACK API): SnapSave / Direct Extractor
+    # METHOD 2: YT_DLP WITH MOBILE USER AGENT
     try:
-        fallback_api = f"https://api.vkrnot.com/api/instagram?url={urllib.parse.quote(c_url)}"
-        req = urllib.request.Request(fallback_api, headers={"User-Agent": "Mozilla/5.0"})
+        ydl_opts = {
+            'format': 'bestvideo+bestaudio/best',
+            'outtmpl': output_path,
+            'quiet': True,
+            'no_warnings': True,
+            'user_agent': 'Instagram 219.0.0.12.117 Android',
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([c_url])
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            return True
+    except Exception:
+        pass
+
+    # METHOD 3: BACKUP API
+    try:
+        api_url = f"https://api.vkrnot.com/api/instagram?url={urllib.parse.quote(c_url)}"
+        req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             if res_data.get("status") and res_data.get("data"):
-                return res_data["data"][0].get("url")
+                media_url = res_data["data"][0].get("url")
+                urllib.request.urlretrieve(media_url, output_path)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                    return True
     except Exception:
         pass
 
-    return None
+    return False
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -226,7 +238,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.1 Pro"
+        "🚀 **Versiya:** 3.2 Ultra Fast"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -259,36 +271,41 @@ def handle_message(message):
     # 1. INSTAGRAM & TIKTOK VIDEO YUKLASH
     if "instagram.com" in text or "tiktok.com" in text:
         status_msg = bot.reply_to(message, "⏳ Video yuklanmoqda, kuting...")
+        video_path = f"video_{message.message_id}.mp4"
+
         try:
-            download_url = fetch_download_url(text, is_audio=False)
-            
-            if download_url:
+            success = download_insta_video(text, video_path)
+
+            if success and os.path.exists(video_path):
                 bot_info = bot.get_me()
                 inline_markup = types.InlineKeyboardMarkup()
                 
-                btn_audio = types.InlineKeyboardButton("🎵 Qo'shiqni yuklab olish", callback_data=f"cob_aud_{urllib.parse.quote_plus(text)}")
                 btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
-                inline_markup.add(btn_audio)
                 inline_markup.add(btn_group)
 
-                bot.send_video(
-                    message.chat.id,
-                    download_url,
-                    caption="🎬 Video muvaffaqiyatli yuklandi!\n\n🤖 Bot: InstaSave Bot",
-                    reply_markup=inline_markup
-                )
+                with open(video_path, 'rb') as v:
+                    bot.send_video(
+                        message.chat.id,
+                        v,
+                        caption="🎬 Video muvaffaqiyatli yuklandi!\n\n🤖 Bot: InstaSave Bot",
+                        reply_markup=inline_markup
+                    )
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
                 
-                # Video jo'natilgandan so'ng "yuklanmoqda" xabarini o'chirish
+                # "Yuklanmoqda" xabarini o'chirish
                 try:
                     bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
                 except Exception:
                     pass
             else:
-                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Video shaxsiy (private) akkauntdan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
+                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Video shaxsiy (private) akkauntdan bo'lishi yoki o'chirilgan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
         except Exception:
             bot.edit_message_text("❌ Videoni yuklashda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
+
+        finally:
+            if os.path.exists(video_path):
+                os.remove(video_path)
 
     # 2. QO'SHIQ QIDIRUVI (DEEZER)
     else:
@@ -373,39 +390,6 @@ def handle_deezer_download(call):
 
     except Exception:
         bot.send_message(chat_id, "❌ Qo'shiqni yuklab bo'lmadi.")
-
-# REELS AUDIOSINI YUKLASH TUGMASI
-@bot.callback_query_handler(func=lambda call: call.data.startswith('cob_aud_'))
-def handle_cobalt_audio(call):
-    bot.answer_callback_query(call.id, "🎵 Qo'shiq ajratib olinmoqda...")
-    target_url = urllib.parse.unquote_plus(call.data.replace('cob_aud_', ''))
-    status_msg = bot.send_message(call.message.chat.id, "⏳ Audio yuklanmoqda...")
-
-    try:
-        audio_url = fetch_download_url(target_url, is_audio=True)
-        if audio_url:
-            bot_info = bot.get_me()
-            inline_markup = types.InlineKeyboardMarkup()
-            btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
-            inline_markup.add(btn_group)
-
-            bot.send_audio(
-                call.message.chat.id,
-                audio_url,
-                caption="🎵 Audio muvaffaqiyatli ajratib olindi!\n\n🤖 Bot: InstaSave Bot",
-                reply_markup=inline_markup
-            )
-            log_download(call.message.chat.id, call.from_user.username, f"Audio: {target_url}")
-            
-            try:
-                bot.delete_message(chat_id=call.message.chat.id, message_id=status_msg.message_id)
-            except Exception:
-                pass
-        else:
-            bot.edit_message_text("❌ Audioni ajratish imkoni bo'lmadi.", chat_id=call.message.chat.id, message_id=status_msg.message_id)
-
-    except Exception:
-        bot.edit_message_text("❌ Audioni yuklashda xatolik yuz berdi.", chat_id=call.message.chat.id, message_id=status_msg.message_id)
 
 if __name__ == "__main__":
     init_db()
