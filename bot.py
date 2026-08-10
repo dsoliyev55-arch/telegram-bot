@@ -29,8 +29,6 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 bot = telebot.TeleBot(TOKEN)
 DB_NAME = "bot_data.db"
 
-# Telegram 64-baytlik limitidan o'tish uchun vaqtinchalik havola xotirasi
-video_url_store = {}
 user_search_results = {}
 
 # DATABASE SOZLAMALARI
@@ -184,7 +182,7 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.5 Final Ultra"
+        "🚀 **Versiya:** 3.6 Clean UI"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
 
@@ -194,7 +192,10 @@ def cb_check_sub(call):
     if unsub:
         bot.answer_callback_query(call.id, "❌ Hali barcha kanallarga obuna bo'lmadingiz!", show_alert=True)
     else:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
         bot.send_message(call.message.chat.id, "✅ Obuna tasdiqlandi! Endi botdan to'liq foydalanishingiz mumkin.", reply_markup=get_main_keyboard())
 
 # SAQLASH TUGMASI HANDLERI
@@ -206,7 +207,7 @@ def handle_save_video(call):
     except Exception:
         bot.answer_callback_query(call.id, "❌ Saqlashda xatolik yuz berdi.", show_alert=True)
 
-# VIDEODAN MUSIQA AJRATISH (KAFOLATLANGAN 100% ISHLASH)
+# VIDEODAN MUSIQA AJRATISH HANDLERI (TOZA O'CHIRISH BILAN)
 @bot.callback_query_handler(func=lambda call: call.data.startswith("get_audio_"))
 def handle_get_audio(call):
     msg_id_str = call.data.replace("get_audio_", "")
@@ -224,17 +225,21 @@ def handle_get_audio(call):
     temp_audio = f"audio_{msg_id}.mp3"
 
     try:
-        # Telegram Serveridan video faylni yuklab olish
         file_info = bot.get_file(call.message.video.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
         with open(temp_video, 'wb') as f:
             f.write(downloaded_file)
 
-        # Imageio-FFmpeg orqali har qanday serverda audioni 100% ajratib olish
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         cmd = [ffmpeg_exe, "-y", "-i", temp_video, "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", temp_audio]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # KAFOLATLANGAN TOZA O'CHIRISH (Audio yuborishdan oldin)
+        try:
+            bot.delete_message(chat_id=call.message.chat.id, message_id=status_audio.message_id)
+        except Exception:
+            pass
 
         if os.path.exists(temp_audio) and os.path.getsize(temp_audio) > 1000:
             bot_info = bot.get_me()
@@ -242,6 +247,7 @@ def handle_get_audio(call):
             btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
             inline_markup.add(btn_group)
 
+            # Reply qilmasdan toza yuborish
             with open(temp_audio, 'rb') as aud:
                 bot.send_audio(
                     call.message.chat.id,
@@ -254,13 +260,13 @@ def handle_get_audio(call):
             bot.send_message(call.message.chat.id, "❌ Ushbu videoda ovoz trek topilmadi.")
 
     except Exception:
-        bot.send_message(call.message.chat.id, "❌ Audioni ajratishda xatolik yuz berdi.")
-
-    finally:
         try:
             bot.delete_message(chat_id=call.message.chat.id, message_id=status_audio.message_id)
         except Exception:
             pass
+        bot.send_message(call.message.chat.id, "❌ Audioni ajratishda xatolik yuz berdi.")
+
+    finally:
         if os.path.exists(temp_video):
             os.remove(temp_video)
         if os.path.exists(temp_audio):
@@ -291,24 +297,23 @@ def handle_message(message):
         try:
             success = download_insta_video(text, video_path)
 
-            if success and os.path.exists(video_path):
-                # BIRINCHI ISH: Video yuklanib bo'lishi bilan tepadagi matnli xabarni KAFOLATLANGAN holda o'chirish
-                try:
-                    bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
-                except Exception:
-                    pass
+            # KAFOLATLANGAN TOZA O'CHIRISH (Videoni yuborishdan OLDIN)
+            try:
+                bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+            except Exception:
+                pass
 
+            if success and os.path.exists(video_path):
                 bot_info = bot.get_me()
                 inline_markup = types.InlineKeyboardMarkup(row_width=1)
 
                 btn_save = types.InlineKeyboardButton("💾 Saqlash", callback_data="save_video")
-                # Callback data ichida qisqa Message ID yuboriladi (Telegram 64-bayt limitidan oshmasligi uchun)
                 btn_audio = types.InlineKeyboardButton("📥 Qo'shiqni yuklab olish", callback_data=f"get_audio_{message.message_id}")
                 btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
                 
                 inline_markup.add(btn_save, btn_audio, btn_group)
 
-                # QABUL QILUVCHI KUTMASLIGI UCHUN VIDEONI YUBORISH
+                # Videoni toza yuborish (eski xabarga reply qilmasdan)
                 with open(video_path, 'rb') as v:
                     bot.send_video(
                         message.chat.id,
@@ -319,13 +324,14 @@ def handle_message(message):
                 log_download(message.chat.id, message.from_user.username, f"Video: {text}")
 
             else:
-                bot.edit_message_text("❌ Videoni yuklab bo'lmadi. Link yopiq yoki o'chirilgan bo'lishi mumkin.", chat_id=message.chat.id, message_id=status_msg.message_id)
+                bot.send_message(message.chat.id, "❌ Videoni yuklab bo'lmadi. Link yopiq yoki o'chirilgan bo'lishi mumkin.")
 
         except Exception:
             try:
-                bot.edit_message_text("❌ Videoni yuklashda xatolik yuz berdi.", chat_id=message.chat.id, message_id=status_msg.message_id)
+                bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
             except Exception:
                 pass
+            bot.send_message(message.chat.id, "❌ Videoni yuklashda xatolik yuz berdi.")
 
         finally:
             if os.path.exists(video_path):
@@ -398,6 +404,11 @@ def handle_deezer_download(call):
         btn_group = types.InlineKeyboardButton("Guruhga qo'shish ⤴️", url=f"https://t.me/{bot_info.username}?startgroup=true")
         inline_markup.add(btn_group)
 
+        try:
+            bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+        except Exception:
+            pass
+
         bot.send_audio(
             chat_id,
             preview_url,
@@ -406,13 +417,12 @@ def handle_deezer_download(call):
             reply_markup=inline_markup
         )
         log_download(chat_id, call.from_user.username, f"Qo'shiq: {artist} - {title}")
-        
+
+    except Exception:
         try:
             bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         except Exception:
             pass
-
-    except Exception:
         bot.send_message(chat_id, "❌ Qo'shiqni yuklab bo'lmadi.")
 
 if __name__ == "__main__":
