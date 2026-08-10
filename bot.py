@@ -68,7 +68,6 @@ def send_about(message):
         "🤖 **Bot haqida ma'lumot:**\n\n"
         "Ushbu bot Instagram ijtimoiy tarmog'idan videolarni "
         "tez hamda qulay yuklab olish uchun yaratilgan.\n\n"
-        "👤 **Bot egasi:** Soliyev Davronbek\n"
         "🚀 **Versiya:** 1.0"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
@@ -99,7 +98,6 @@ def handle_message(message):
 
         bot.edit_message_text("⬆️ Telegram'ga yuklanmoqda...", chat_id=message.chat.id, message_id=status_msg.message_id)
 
-        # Inline tugmalar
         inline_markup = types.InlineKeyboardMarkup()
         if shortcode:
             btn_audio = types.InlineKeyboardButton("🎵 To'liq qo'shiqni yuklab olish", callback_data=f"aud_{shortcode}")
@@ -114,7 +112,7 @@ def handle_message(message):
                 bot.send_video(
                     message.chat.id, 
                     v, 
-                    caption=f"🎬 {title}\n\n👤 Ega: Soliyev Davronbek\n🤖 Bot: InstaSave Bot",
+                    caption=f"🎬 {title}\n\n🤖 Bot: InstaSave Bot",
                     reply_markup=inline_markup
                 )
 
@@ -127,18 +125,16 @@ def handle_message(message):
         if os.path.exists(video_file):
             os.remove(video_file)
 
-# To'liq qo'shiqni YouTube'dan qidirib yuklab berish handler'i
 @bot.callback_query_handler(func=lambda call: call.data.startswith('aud_'))
 def handle_audio_download(call):
     bot.answer_callback_query(call.id, "🎵 To'liq qo'shiq qidirilmoqda...")
     shortcode = call.data.replace('aud_', '')
     insta_url = f"https://www.instagram.com/reel/{shortcode}/"
     
-    status_msg = bot.send_message(call.message.chat.id, "🔍 Qo'shiqning to'liq varianti qidirilmoqda hamda yuklanmoqda...")
+    status_msg = bot.send_message(call.message.chat.id, "🔍 Qo'shiqning to'liq varianti qidirilmoqda...")
     audio_file = f"full_audio_{call.message.message_id}.mp3"
 
     try:
-        # 1. Instagram'dan musiqa yoki video nomini aniqlash
         search_query = ""
         with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
             info = ydl.extract_info(insta_url, download=False)
@@ -151,13 +147,11 @@ def handle_audio_download(call):
             elif track:
                 search_query = track
             else:
-                # Hetsteglarni olib tashlash
                 search_query = re.sub(r'#\w+', '', title).strip()
 
         if not search_query:
             search_query = "Instagram original audio"
 
-        # 2. YouTube'dan 1-chi chiqqan to'liq musiqani yuklab olish
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': audio_file,
@@ -167,7 +161,7 @@ def handle_audio_download(call):
         }
         
         with YoutubeDL(ydl_opts) as ydl:
-            yt_info = ydl.extract_info(f"ytsearch1:{search_query} full audio", download=True)
+            yt_info = ydl.extract_info(f"ytsearch1:{search_query} full song audio", download=True)
             song_title = search_query
             if 'entries' in yt_info and len(yt_info['entries']) > 0:
                 song_title = yt_info['entries'][0].get('title', search_query)
@@ -177,7 +171,7 @@ def handle_audio_download(call):
                 bot.send_audio(
                     call.message.chat.id,
                     a,
-                    caption=f"🎵 **{song_title}**\n\n👤 Ega: Soliyev Davronbek\n🤖 Bot: InstaSave Bot",
+                    caption=f"🎵 **{song_title}**\n\n🤖 Bot: InstaSave Bot",
                     reply_to_message_id=call.message.message_id,
                     parse_mode="Markdown"
                 )
