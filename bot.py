@@ -9,6 +9,7 @@ import telebot
 from telebot import types
 from yt_dlp import YoutubeDL
 
+# Render uchun web-server
 app = Flask(__name__)
 
 @app.route('/')
@@ -23,7 +24,6 @@ TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
 USER_FILE = "users.txt"
-# Izlash natijalarini vaqtincha saqlash uchun
 user_search_results = {}
 
 def add_user(user_id):
@@ -55,7 +55,7 @@ def send_welcome(message):
     add_user(message.chat.id)
     welcome_text = (
         "Salom! Menga Instagram havolasini yoki qo'shiq nomini yuboring.\n"
-        "Men sizga video va musiqalarni topib beraman! 🎥🎵"
+        "Men sizga video va to'liq musiqalarni topib beraman! 🎥🎵"
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard())
 
@@ -76,7 +76,7 @@ def send_about(message):
     about_text = (
         "🤖 **Bot haqida ma'lumot:**\n\n"
         "Ushbu bot Instagram ijtimoiy tarmog'idan videolarni "
-        "tez hamda qulay yuklab olish hamda musiqalarni izlab topish uchun yaratilgan.\n\n"
+        "tez hamda qulay yuklab olish va to'liq musiqalarni izlab topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
         "🚀 **Versiya:** 1.0"
     )
@@ -133,7 +133,7 @@ def handle_message(message):
             if os.path.exists(video_file):
                 os.remove(video_file)
 
-    # 2. QO'SHIQ NOMI MATN SIFATIDA YUBORILGANDA (TINGLA BOT USULI)
+    # 2. QO'SHIQ NOMI YUBORILGANDA (TINGLA BOT STYLE)
     else:
         status_msg = bot.reply_to(message, f"🔍 **{text}** qidirilmoqda...", parse_mode="Markdown")
         try:
@@ -176,28 +176,43 @@ def handle_message(message):
         except Exception:
             bot.edit_message_text("❌ Hech narsa topilmadi.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
-# DEEZER MUSIQASINI YUKLASH (1, 2, 3, 4, 5 TUGMALARI UCHUN)
+# 1, 2, 3, 4, 5 TUGMASI BOSILGANDA TO'LIQ MUSIQANI YUKLAB BERISH
 @bot.callback_query_handler(func=lambda call: call.data.startswith('dz_'))
 def handle_deezer_download(call):
     chat_id = call.message.chat.id
     idx = int(call.data.replace('dz_', ''))
 
     if chat_id not in user_search_results or idx >= len(user_search_results[chat_id]):
-        bot.answer_callback_query(call.id, "❌ Ma'lumot eskirgan, qayta qidiring.")
+        bot.answer_callback_query(call.id, "❌ Qidiruv muddati o'tgan, qayta qidiring.")
         return
 
     track = user_search_results[chat_id][idx]
     artist = track['artist']['name']
     title = track['title']
-    preview_url = track['preview']
+    search_query = f"{artist} - {title}"
 
-    bot.answer_callback_query(call.id, f"🎵 {title} yuklanmoqda...")
-    status_msg = bot.send_message(chat_id, "⏳ Qo'shiq yuklanmoqda...")
+    bot.answer_callback_query(call.id, f"🎵 {title} (to'liq) yuklanmoqda...")
+    status_msg = bot.send_message(chat_id, f"⏳ **{search_query}** to'liq yuklanmoqda...")
 
-    audio_file = f"dz_{call.message.message_id}.mp3"
+    audio_file = f"full_{call.message.message_id}.mp3"
 
     try:
-        urllib.request.urlretrieve(preview_url, audio_file)
+        # YouTube blokirovkasini chetlab o'tib, to'liq musiqani yuklab olish
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': audio_file,
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch1',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios']
+                }
+            }
+        }
+
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(f"ytsearch1:{search_query} full audio", download=True)
 
         bot_info = bot.get_me()
         inline_markup = types.InlineKeyboardMarkup()
@@ -215,10 +230,10 @@ def handle_deezer_download(call):
                 )
             bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
         else:
-            bot.edit_message_text("❌ Hech narsa topilmadi.", chat_id=chat_id, message_id=status_msg.message_id)
+            bot.edit_message_text("❌ Musiqaning to'liq varianti topilmadi.", chat_id=chat_id, message_id=status_msg.message_id)
 
     except Exception:
-        bot.edit_message_text("❌ Hech narsa topilmadi.", chat_id=chat_id, message_id=status_msg.message_id)
+        bot.edit_message_text("❌ Musiqani yuklab bo'lmadi.", chat_id=chat_id, message_id=status_msg.message_id)
 
     finally:
         if os.path.exists(audio_file):
