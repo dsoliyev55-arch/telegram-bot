@@ -68,6 +68,7 @@ def send_about(message):
         "🤖 **Bot haqida ma'lumot:**\n\n"
         "Ushbu bot Instagram ijtimoiy tarmog'idan videolarni "
         "tez hamda qulay yuklab olish uchun yaratilgan.\n\n"
+        "👤 **Bot egasi:** Soliyev Davronbek\n"
         "🚀 **Versiya:** 1.0"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
