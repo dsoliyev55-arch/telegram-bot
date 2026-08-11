@@ -173,7 +173,7 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
-# BOT HAQIDA BUYRUG'I (XATOLIK TUZATILDI)
+# BOT HAQIDA BUYRUG'I
 @bot.message_handler(commands=['about', 'info'])
 @bot.message_handler(func=lambda message: "bot haqida" in message.text.lower())
 def send_about(message):
@@ -183,9 +183,45 @@ def send_about(message):
         "Ushbu bot Instagram va TikTok ijtimoiy tarmoqlaridan videolarni "
         "tez va yuqori sifatda yuklash hamda to'liq musiqalarni qidirib topish uchun yaratilgan.\n\n"
         "👤 **Bot egasi:** Soliyev Davronbek\n"
-        "🚀 **Versiya:** 3.6 Clean UI"
+        "🚀 **Versiya:** 3.7 Ultra Clean"
     )
     bot.reply_to(message, about_text, parse_mode="Markdown")
+
+# OMMAVIY XABAR YUBORISH (BROADCAST)
+@bot.message_handler(commands=['broadcast'])
+def broadcast_message(message):
+    if message.chat.id != ADMIN_ID:
+        return
+
+    if message.reply_to_message:
+        text = message.reply_to_message.text
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        users = cursor.fetchall()
+        conn.close()
+
+        sent = 0
+        blocked = 0
+        
+        status_msg = bot.send_message(message.chat.id, f"🚀 Xabar yuborish boshlandi ({len(users)} ta foydalanuvchi)...")
+
+        for user in users:
+            try:
+                bot.send_message(user[0], text)
+                sent += 1
+            except Exception:
+                blocked += 1
+        
+        bot.edit_message_text(
+            f"✅ Xabar yuborish yakunlandi!\n\n"
+            f"📨 Yetib bordi: {sent} ta\n"
+            f"🚫 Bloklaganlar: {blocked} ta",
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id
+        )
+    else:
+        bot.reply_to(message, "⚠️ Xabar yuborish uchun yubormoqchi bo'lgan xabaringizga 'Reply' (javob) qilib /broadcast deb yozing.")
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_subscription")
 def cb_check_sub(call):
